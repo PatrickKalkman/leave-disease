@@ -4,6 +4,12 @@ import pathlib
 from os import path
 import pandas as pd
 
+def balance_data(csv_location, input_path):
+    train_df = pd.read_csv()
+    train_df.hist(column="count") 
+
+
+
 def distribute_images(train_validation_split_ratio, csv_location, input_path):
     create_folder_structure()
     train_df = pd.read_csv(csv_location)
@@ -23,7 +29,7 @@ def distribute_images(train_validation_split_ratio, csv_location, input_path):
 
         copy_images(training_images, f'train/{label}', input_path)
         copy_images(validation_images, f'validate/{label}', input_path)
-
+    
 
 def create_folder_structure():
     if path.exists('./train'):

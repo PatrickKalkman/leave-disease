@@ -1,23 +1,26 @@
-import math
-import os
-import pathlib
-import shutil
+import pickle
+import math, re, os
+from os import path
+from tqdm import tqdm
 
-import efficientnet.tfkeras as efn
-import numpy as np
-import pandas as pd
 import tensorflow as tf
 import tensorflow.keras as keras
 from keras_preprocessing.image import ImageDataGenerator
 from tensorflow.keras import layers
-from tensorflow.keras.callbacks import LearningRateScheduler, EarlyStopping, ModelCheckpoint
-from tqdm import tqdm
+from tensorflow.keras.callbacks import LearningRateScheduler, EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
+import numpy as np
+import efficientnet.tfkeras as efn
+from tensorflow.keras import mixed_precision
+
+import pandas as pd
+import shutil
+import pathlib
 
 import leave_data as ld
 import leave_plot as lp
 
 EPOCHS = 50
-BATCH_SIZE = 8
+BATCH_SIZE = 10
 IMG_SIZE = (512, 512)
 
 #BASE_FOLDER = '/kaggle/input/cassava-leaf-disease-classification/'
@@ -26,16 +29,17 @@ IMG_SIZE = (512, 512)
 BASE_FOLDER = './data/'
 WORKING_FOLDER = './'
 
-CSV_LOCATION = f'{BASE_FOLDER}train.csv'
+CSV_LOCATION = f'{BASE_FOLDER}merged_data.csv'
 TRAINING_IMAGES_INPUT = f'{BASE_FOLDER}train_images/'
 TEST_IMAGES_INPUT = f'{BASE_FOLDER}test_images/'
 SUBMISSION_FILE = f'{WORKING_FOLDER}submission.csv'
 
+mixed_precision.set_global_policy('mixed_float16')
 
 def create_cnn_model():
 
     model = keras.models.Sequential()
-    pre_trained_model = efn.EfficientNetB4(input_shape=(*IMG_SIZE, 3), 
+    pre_trained_model = efn.EfficientNetB4(input_shape=(*IMG_SIZE, 3),
                                     include_top=False, 
                                     weights='noisy-student')
 
@@ -47,10 +51,10 @@ def create_cnn_model():
             layer.trainable = True
 
     model.add(pre_trained_model)
-    model.add(layers.Dropout(0.25))
+    model.add(layers.Dropout(0.4))
     model.add(layers.GlobalAveragePooling2D())
-    model.add(layers.Dropout(0.25))
-    model.add(layers.Dense(5,activation='softmax'))
+    model.add(layers.Dropout(0.4))
+    model.add(layers.Dense(5, activation='softmax'))
 
     # add metrics
     metrics = [
@@ -63,6 +67,7 @@ def create_cnn_model():
     model.compile(optimizer=optimizer, loss=loss, metrics=metrics)
     print(model.summary())
     return model
+
 
 LEARNING_RATE = 3e-5
 LR_START = 1e-8
@@ -88,11 +93,11 @@ def lrfn(epoch):
 
 
 def create_callbacks():
-    early_stopping = EarlyStopping(patience=3, monitor='val_accuracy', verbose=1)
+    early_stopping = EarlyStopping(patience=3, monitor='val_loss', verbose=1)
 
     lr_schedule = LearningRateScheduler(lrfn, verbose=1)
 
-    model_checkpoint = ModelCheckpoint(monitor='val_accuracy',
+    model_checkpoint = ModelCheckpoint(monitor='val_loss',
                                        filepath='./best-model-efn.h5',
                                        save_best_only=True,
                                        verbose=1)
@@ -108,19 +113,27 @@ def create_callbacks():
 
 def train_model_naive_split():
 
-    train_gen = ImageDataGenerator(
+    inp_train_gen = ImageDataGenerator(
         rescale=1. / 255,
-        rotation_range=360,
-        width_shift_range=0.2,
-        height_shift_range=0.2,
+        rotation_range=260,
+        width_shift_range=0.4,
+        height_shift_range=0.4,
         shear_range=0.2,
-        zoom_range=0.2,
+        zoom_range=0.4,
         horizontal_flip=True,
         vertical_flip=True,
         fill_mode='nearest'
     )
 
-    train_iterator = train_gen.flow_from_directory('./train/train',
+    # Create training and validation generator.
+    # train_iterator = lm.MixupImageDataGenerator(generator=inp_train_gen,
+    #                                           directory='./train/train',
+    #                                           batch_size=BATCH_SIZE,
+    #                                           img_height=IMG_SIZE[0],
+    #                                           img_width=IMG_SIZE[1],
+    #                                           subset='training')
+
+    train_iterator = inp_train_gen.flow_from_directory('./train/train',
                                                    target_size=IMG_SIZE,
                                                    batch_size=BATCH_SIZE,
                                                    class_mode='categorical')
@@ -134,6 +147,7 @@ def train_model_naive_split():
     model = create_cnn_model()
 
     history = model.fit(train_iterator,
+                        #steps_per_epoch=train_iterator.get_steps_per_epoch(),
                         validation_data=validation_iterator,
                         epochs=EPOCHS,
                         callbacks=create_callbacks())
@@ -211,7 +225,8 @@ def store_prediction():
     print('Writing submission')
     df.to_csv(SUBMISSION_FILE)
 
-ld.distribute_images(0.97, CSV_LOCATION, TRAINING_IMAGES_INPUT)
+
+ld.distribute_images(0.9, CSV_LOCATION, TRAINING_IMAGES_INPUT)
 history = train_model_naive_split()
 lp.plot_result(history)
 store_prediction()
